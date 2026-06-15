@@ -18,6 +18,17 @@ let historyHasMore = false;
 let historyTotal = 0;
 let currentFiles = [];
 
+let thresholdConfig = {
+  mode: 'fixed',
+  fixed: { cpu: 80, memory: 80, disk: 90 },
+  periods: {}
+};
+let thresholdTemplates = {};
+let selectedDay = null;
+
+const DAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
 document.addEventListener('DOMContentLoaded', () => {
   initCharts();
   bindEvents();
@@ -285,6 +296,52 @@ function bindEvents() {
   document.getElementById('maxFileSize').addEventListener('input', (e) => {
     document.getElementById('maxFileSizeValue').textContent = e.target.value + ' MB';
   });
+
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const mode = btn.dataset.mode;
+      document.getElementById('fixedThresholdSection').style.display = mode === 'fixed' ? '' : 'none';
+      document.getElementById('periodThresholdSection').style.display = mode === 'period' ? '' : 'none';
+    });
+  });
+
+  document.querySelectorAll('.template-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const templateId = card.dataset.template;
+      applyTemplate(templateId);
+    });
+  });
+
+  document.getElementById('btnCopyDayConfig').addEventListener('click', () => {
+    document.getElementById('copyDayModal').classList.add('active');
+  });
+
+  document.getElementById('btnCloseCopyDay').addEventListener('click', () => {
+    document.getElementById('copyDayModal').classList.remove('active');
+  });
+
+  document.getElementById('btnCancelCopyDay').addEventListener('click', () => {
+    document.getElementById('copyDayModal').classList.remove('active');
+  });
+
+  document.getElementById('btnConfirmCopyDay').addEventListener('click', confirmCopyDay);
+
+  document.getElementById('btnApplyToAll').addEventListener('click', () => {
+    if (selectedDay === null) {
+      showToast('warning', '请先选择一天');
+      return;
+    }
+    const sourcePeriods = JSON.parse(JSON.stringify(thresholdConfig.periods[selectedDay] || []));
+    for (let d = 0; d < 7; d++) {
+      thresholdConfig.periods[d] = JSON.parse(JSON.stringify(sourcePeriods));
+    }
+    renderCalendar();
+    showToast('success', `已将${DAY_NAMES[selectedDay]}的配置应用到全部七天`);
+  });
+
+  document.getElementById('btnAddPeriod').addEventListener('click', addNewPeriod);
 }
 
 function switchTab(tab) {
@@ -368,6 +425,35 @@ ipcRenderer.on('thresholds-data', (event, thresholds) => {
     const sizeMB = Math.round(thresholds.maxFileSize / 1024 / 1024);
     document.getElementById('maxFileSize').value = sizeMB;
     document.getElementById('maxFileSizeValue').textContent = sizeMB + ' MB';
+  }
+
+  if (thresholds.config) {
+    thresholdConfig = thresholds.config;
+    thresholdTemplates = thresholds.templates || {};
+
+    const mode = thresholdConfig.mode || 'fixed';
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    document.getElementById('fixedThresholdSection').style.display = mode === 'fixed' ? '' : 'none';
+    document.getElementById('periodThresholdSection').style.display = mode === 'period' ? '' : 'none';
+
+    if (mode === 'fixed' && thresholdConfig.fixed) {
+      document.getElementById('cpuThreshold').value = thresholdConfig.fixed.cpu;
+      document.getElementById('cpuThresholdValue').textContent = thresholdConfig.fixed.cpu + '%';
+      document.getElementById('memoryThreshold').value = thresholdConfig.fixed.memory;
+      document.getElementById('memoryThresholdValue').textContent = thresholdConfig.fixed.memory + '%';
+      document.getElementById('diskThreshold').value = thresholdConfig.fixed.disk;
+      document.getElementById('diskThresholdValue').textContent = thresholdConfig.fixed.disk + '%';
+    }
+
+    renderCalendar();
+  }
+
+  if (thresholds.currentThresholds) {
+    document.getElementById('currentCpuT').textContent = thresholds.currentThresholds.cpu;
+    document.getElementById('currentMemT').textContent = thresholds.currentThresholds.memory;
+    document.getElementById('currentDiskT').textContent = thresholds.currentThresholds.disk;
   }
 });
 
@@ -728,17 +814,40 @@ function closeSettings() {
 }
 
 function saveSettings() {
-  const thresholds = {
-    cpu: parseInt(document.getElementById('cpuThreshold').value),
-    memory: parseInt(document.getElementById('memoryThreshold').value),
-    disk: parseInt(document.getElementById('diskThreshold').value),
-    splitStrategy: document.getElementById('splitStrategy').value,
-    maxFileSize: parseInt(document.getElementById('maxFileSize').value) * 1024 * 1024
-  };
-  
+  const activeModeBtn = document.querySelector('.mode-btn.active');
+  const mode = activeModeBtn ? activeModeBtn.dataset.mode : 'fixed';
+
+  if (mode === 'fixed') {
+    const thresholds = {
+      cpu: parseInt(document.getElementById('cpuThreshold').value),
+      memory: parseInt(document.getElementById('memoryThreshold').value),
+      disk: parseInt(document.getElementById('diskThreshold').value),
+      splitStrategy: document.getElementById('splitStrategy').value,
+      maxFileSize: parseInt(document.getElementById('maxFileSize').value) * 1024 * 1024
+    };
+    thresholdConfig.mode = 'fixed';
+    thresholdConfig.fixed = {
+      cpu: thresholds.cpu,
+      memory: thresholds.memory,
+      disk: thresholds.disk
+    };
+    ipcRenderer.send('update-thresholds', thresholds);
+    ipcRenderer.send('update-threshold-config', { mode: 'fixed', fixed: thresholdConfig.fixed });
+  } else {
+    ipcRenderer.send('update-threshold-config', {
+      mode: 'period',
+      periods: thresholdConfig.periods
+    });
+  }
+
+  const splitStrategy = document.getElementById('splitStrategy').value;
+  const maxFileSize = parseInt(document.getElementById('maxFileSize').value) * 1024 * 1024;
   const logIntervalSec = parseInt(document.getElementById('logInterval').value);
-  
-  ipcRenderer.send('update-thresholds', thresholds);
+
+  ipcRenderer.send('update-thresholds', {
+    splitStrategy,
+    maxFileSize
+  });
   ipcRenderer.send('set-log-interval', logIntervalSec * 1000);
 }
 
@@ -868,4 +977,214 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function renderCalendar() {
+  const grid = document.getElementById('calendarGrid');
+  grid.innerHTML = '';
+
+  DAY_ORDER.forEach(day => {
+    const periods = thresholdConfig.periods[day] || [];
+    const isToday = new Date().getDay() === day;
+    const isSelected = selectedDay === day;
+
+    const cell = document.createElement('div');
+    cell.className = 'calendar-cell' + (isToday ? ' today' : '') + (isSelected ? ' selected' : '');
+    cell.addEventListener('click', () => selectDay(day));
+
+    let inner = `<div class="cell-day-name">${DAY_NAMES[day]}${isToday ? ' (今天)' : ''}</div>`;
+
+    if (periods.length === 0) {
+      inner += '<div class="cell-empty">未配置</div>';
+    } else {
+      inner += '<div class="cell-periods">';
+      periods.forEach((p, idx) => {
+        const width = ((p.endHour - p.startHour) / 24) * 100;
+        const left = (p.startHour / 24) * 100;
+        inner += `<div class="period-bar" style="width:${width}%;left:${left}%" title="${p.label}: ${formatHour(p.startHour)}-${formatHour(p.endHour)} CPU:${p.cpu}% 内存:${p.memory}% 磁盘:${p.disk}%">
+          <span class="period-bar-text">${p.label}</span>
+        </div>`;
+      });
+      inner += '</div>';
+
+      inner += '<div class="cell-thresholds">';
+      const maxCpu = Math.max(...periods.map(p => p.cpu));
+      const maxMem = Math.max(...periods.map(p => p.memory));
+      const maxDisk = Math.max(...periods.map(p => p.disk));
+      inner += `<span class="cell-badge cpu">C:${maxCpu}%</span>`;
+      inner += `<span class="cell-badge mem">M:${maxMem}%</span>`;
+      inner += `<span class="cell-badge disk">D:${maxDisk}%</span>`;
+      inner += '</div>';
+    }
+
+    cell.innerHTML = inner;
+    grid.appendChild(cell);
+  });
+}
+
+function selectDay(day) {
+  selectedDay = day;
+  renderCalendar();
+  renderPeriodEditor(day);
+}
+
+function renderPeriodEditor(day) {
+  const editor = document.getElementById('periodEditor');
+  const title = document.getElementById('periodEditorTitle');
+  const list = document.getElementById('periodList');
+
+  editor.style.display = '';
+  title.textContent = `编辑 ${DAY_NAMES[day]} 时段配置`;
+
+  const periods = thresholdConfig.periods[day] || [];
+  list.innerHTML = '';
+
+  if (periods.length === 0) {
+    list.innerHTML = '<div class="empty-state">无时段配置，点击"添加时段"</div>';
+    return;
+  }
+
+  const sortedPeriods = [...periods].sort((a, b) => a.startHour - b.startHour);
+
+  sortedPeriods.forEach((p, idx) => {
+    const originalIdx = periods.indexOf(p);
+    const item = document.createElement('div');
+    item.className = 'period-item';
+    item.innerHTML = `
+      <div class="period-item-header">
+        <span class="period-item-label">${escapeHtml(p.label)}</span>
+        <div class="period-item-actions">
+          <button class="btn-icon-sm" data-action="delete" data-index="${originalIdx}" title="删除">✕</button>
+        </div>
+      </div>
+      <div class="period-item-time">${formatHour(p.startHour)} - ${formatHour(p.endHour)}</div>
+      <div class="period-item-sliders">
+        <div class="period-slider">
+          <label>CPU</label>
+          <input type="range" min="10" max="100" value="${p.cpu}" data-field="cpu" data-index="${originalIdx}">
+          <span class="period-slider-val">${p.cpu}%</span>
+        </div>
+        <div class="period-slider">
+          <label>内存</label>
+          <input type="range" min="10" max="100" value="${p.memory}" data-field="memory" data-index="${originalIdx}">
+          <span class="period-slider-val">${p.memory}%</span>
+        </div>
+        <div class="period-slider">
+          <label>磁盘</label>
+          <input type="range" min="10" max="100" value="${p.disk}" data-field="disk" data-index="${originalIdx}">
+          <span class="period-slider-val">${p.disk}%</span>
+        </div>
+      </div>
+    `;
+    list.appendChild(item);
+  });
+
+  list.querySelectorAll('[data-action="delete"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.index);
+      deletePeriod(day, idx);
+    });
+  });
+
+  list.querySelectorAll('input[type="range"]').forEach(slider => {
+    slider.addEventListener('input', () => {
+      const idx = parseInt(slider.dataset.index);
+      const field = slider.dataset.field;
+      const val = parseInt(slider.value);
+      slider.nextElementSibling.textContent = val + '%';
+      if (thresholdConfig.periods[day] && thresholdConfig.periods[day][idx]) {
+        thresholdConfig.periods[day][idx][field] = val;
+        renderCalendar();
+      }
+    });
+  });
+}
+
+function addNewPeriod() {
+  if (selectedDay === null) return;
+
+  if (!thresholdConfig.periods[selectedDay]) {
+    thresholdConfig.periods[selectedDay] = [];
+  }
+
+  const periods = thresholdConfig.periods[selectedDay];
+  const lastEnd = periods.length > 0 ? Math.max(...periods.map(p => p.endHour)) : 0;
+  const startHour = Math.min(lastEnd, 22);
+  const endHour = Math.min(startHour + 2, 24);
+
+  periods.push({
+    startHour,
+    endHour,
+    cpu: 80,
+    memory: 80,
+    disk: 85,
+    label: '新时段'
+  });
+
+  renderCalendar();
+  renderPeriodEditor(selectedDay);
+}
+
+function deletePeriod(day, index) {
+  if (thresholdConfig.periods[day]) {
+    thresholdConfig.periods[day].splice(index, 1);
+    renderCalendar();
+    renderPeriodEditor(day);
+  }
+}
+
+function applyTemplate(templateId) {
+  const template = thresholdTemplates[templateId];
+  if (!template) return;
+
+  thresholdConfig.mode = 'period';
+  thresholdConfig.periods = JSON.parse(JSON.stringify(template.periods));
+
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === 'period');
+  });
+  document.getElementById('fixedThresholdSection').style.display = 'none';
+  document.getElementById('periodThresholdSection').style.display = '';
+
+  selectedDay = null;
+  document.getElementById('periodEditor').style.display = 'none';
+
+  renderCalendar();
+  showToast('success', `已应用"${template.name}"模板`);
+}
+
+function confirmCopyDay() {
+  const sourceDay = parseInt(document.getElementById('copySourceDay').value);
+  const targetCheckboxes = document.querySelectorAll('#copyTargetDays input[type="checkbox"]');
+  const targetDays = [];
+
+  targetCheckboxes.forEach(cb => {
+    if (cb.checked) {
+      targetDays.push(parseInt(cb.value));
+    }
+  });
+
+  if (targetDays.length === 0) {
+    showToast('warning', '请至少选择一天');
+    return;
+  }
+
+  const sourcePeriods = JSON.parse(JSON.stringify(thresholdConfig.periods[sourceDay] || []));
+  targetDays.forEach(d => {
+    thresholdConfig.periods[d] = JSON.parse(JSON.stringify(sourcePeriods));
+  });
+
+  renderCalendar();
+  if (selectedDay !== null && targetDays.includes(selectedDay)) {
+    renderPeriodEditor(selectedDay);
+  }
+
+  document.getElementById('copyDayModal').classList.remove('active');
+  showToast('success', `已将${DAY_NAMES[sourceDay]}的配置复制到 ${targetDays.map(d => DAY_NAMES[d]).join('、')}`);
+}
+
+function formatHour(h) {
+  const hours = Math.floor(h);
+  const minutes = Math.round((h - hours) * 60);
+  return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
 }

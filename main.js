@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const si = require('systeminformation');
 const path = require('path');
+const fs = require('fs');
 const LogManager = require('./log-manager');
 
 let mainWindow;
@@ -18,6 +19,142 @@ let splitStrategy = 'daily';
 let maxFileSize = 50 * 1024 * 1024;
 
 let logManager = null;
+
+const THRESHOLD_CONFIG_PATH = path.join(app.getPath('userData'), 'threshold-config.json');
+
+let thresholdConfig = {
+  mode: 'fixed',
+  fixed: { cpu: 80, memory: 80, disk: 90 },
+  periods: createDefaultPeriods()
+};
+
+const THRESHOLD_TEMPLATES = {
+  office: {
+    name: '办公场景',
+    description: '工作时间高阈值，非工作时间低阈值',
+    icon: '🏢',
+    periods: buildPeriodConfig({
+      weekday: [
+        { startHour: 0, endHour: 8, cpu: 50, memory: 50, disk: 80, label: '凌晨' },
+        { startHour: 8, endHour: 18, cpu: 85, memory: 80, disk: 90, label: '工作时间' },
+        { startHour: 18, endHour: 24, cpu: 60, memory: 60, disk: 85, label: '晚间' }
+      ],
+      weekend: [
+        { startHour: 0, endHour: 10, cpu: 40, memory: 40, disk: 75, label: '上午' },
+        { startHour: 10, endHour: 22, cpu: 60, memory: 60, disk: 80, label: '白天' },
+        { startHour: 22, endHour: 24, cpu: 40, memory: 40, disk: 75, label: '深夜' }
+      ]
+    })
+  },
+  server: {
+    name: '服务器场景',
+    description: '24小时运行，阈值相对稳定',
+    icon: '🖥️',
+    periods: buildPeriodConfig({
+      weekday: [
+        { startHour: 0, endHour: 6, cpu: 60, memory: 70, disk: 85, label: '低峰' },
+        { startHour: 6, endHour: 22, cpu: 90, memory: 85, disk: 90, label: '业务时段' },
+        { startHour: 22, endHour: 24, cpu: 70, memory: 75, disk: 85, label: '夜间' }
+      ],
+      weekend: [
+        { startHour: 0, endHour: 24, cpu: 75, memory: 75, disk: 85, label: '全天' }
+      ]
+    })
+  },
+  personal: {
+    name: '个人电脑',
+    description: '日常使用，适中阈值',
+    icon: '💻',
+    periods: buildPeriodConfig({
+      weekday: [
+        { startHour: 0, endHour: 9, cpu: 40, memory: 40, disk: 75, label: '睡眠' },
+        { startHour: 9, endHour: 23, cpu: 80, memory: 75, disk: 85, label: '活跃' },
+        { startHour: 23, endHour: 24, cpu: 40, memory: 40, disk: 75, label: '深夜' }
+      ],
+      weekend: [
+        { startHour: 0, endHour: 10, cpu: 40, memory: 40, disk: 75, label: '上午' },
+        { startHour: 10, endHour: 24, cpu: 80, memory: 75, disk: 85, label: '活跃' }
+      ]
+    })
+  }
+};
+
+function buildPeriodConfig(rules) {
+  const periods = {};
+  for (let d = 0; d < 7; d++) {
+    const isWeekend = d === 0 || d === 6;
+    periods[d] = JSON.parse(JSON.stringify(isWeekend ? rules.weekend : rules.weekday));
+  }
+  return periods;
+}
+
+function createDefaultPeriods() {
+  const defaultPeriod = [
+    { startHour: 0, endHour: 9, cpu: 60, memory: 60, disk: 80, label: '凌晨' },
+    { startHour: 9, endHour: 18, cpu: 80, memory: 80, disk: 90, label: '工作时间' },
+    { startHour: 18, endHour: 24, cpu: 60, memory: 60, disk: 85, label: '晚间' }
+  ];
+  const periods = {};
+  for (let d = 0; d < 7; d++) {
+    periods[d] = JSON.parse(JSON.stringify(defaultPeriod));
+  }
+  return periods;
+}
+
+function loadThresholdConfig() {
+  try {
+    if (fs.existsSync(THRESHOLD_CONFIG_PATH)) {
+      const data = fs.readFileSync(THRESHOLD_CONFIG_PATH, 'utf-8');
+      const saved = JSON.parse(data);
+      thresholdConfig = { ...thresholdConfig, ...saved };
+      if (thresholdConfig.mode === 'fixed') {
+        alertThresholds = { ...alertThresholds, ...thresholdConfig.fixed };
+      }
+    }
+  } catch (err) {
+    console.error('加载阈值配置失败:', err);
+  }
+}
+
+function saveThresholdConfig() {
+  try {
+    fs.writeFileSync(THRESHOLD_CONFIG_PATH, JSON.stringify(thresholdConfig, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('保存阈值配置失败:', err);
+  }
+}
+
+function getCurrentThresholds() {
+  if (thresholdConfig.mode === 'fixed') {
+    return {
+      cpu: thresholdConfig.fixed.cpu,
+      memory: thresholdConfig.fixed.memory,
+      disk: thresholdConfig.fixed.disk
+    };
+  }
+
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const currentHour = now.getHours() + now.getMinutes() / 60;
+
+  const dayPeriods = thresholdConfig.periods[dayOfWeek];
+  if (!dayPeriods || dayPeriods.length === 0) {
+    return { cpu: 80, memory: 80, disk: 90 };
+  }
+
+  for (const period of dayPeriods) {
+    if (currentHour >= period.startHour && currentHour < period.endHour) {
+      return {
+        cpu: period.cpu,
+        memory: period.memory,
+        disk: period.disk
+      };
+    }
+  }
+
+  const last = dayPeriods[dayPeriods.length - 1];
+  return { cpu: last.cpu, memory: last.memory, disk: last.disk };
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -39,6 +176,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  loadThresholdConfig();
   createWindow();
   startMonitoring();
 
@@ -155,37 +293,38 @@ async function collectSystemData() {
 }
 
 function checkAlerts(data) {
+  const thresholds = getCurrentThresholds();
   const alerts = [];
   
-  if (data.cpu.usage >= alertThresholds.cpu) {
+  if (data.cpu.usage >= thresholds.cpu) {
     alerts.push({
       type: 'cpu',
       level: data.cpu.usage >= 95 ? 'critical' : 'warning',
       message: `CPU使用率过高: ${data.cpu.usage}%`,
       value: data.cpu.usage,
-      threshold: alertThresholds.cpu,
+      threshold: thresholds.cpu,
       timestamp: data.timestamp
     });
   }
   
-  if (data.memory.usage >= alertThresholds.memory) {
+  if (data.memory.usage >= thresholds.memory) {
     alerts.push({
       type: 'memory',
       level: data.memory.usage >= 95 ? 'critical' : 'warning',
       message: `内存使用率过高: ${data.memory.usage}%`,
       value: data.memory.usage,
-      threshold: alertThresholds.memory,
+      threshold: thresholds.memory,
       timestamp: data.timestamp
     });
   }
   
-  if (data.disk.usage >= alertThresholds.disk) {
+  if (data.disk.usage >= thresholds.disk) {
     alerts.push({
       type: 'disk',
       level: data.disk.usage >= 98 ? 'critical' : 'warning',
       message: `磁盘使用率过高: ${data.disk.usage}%`,
       value: data.disk.usage,
-      threshold: alertThresholds.disk,
+      threshold: thresholds.disk,
       timestamp: data.timestamp
     });
   }
@@ -293,7 +432,37 @@ ipcMain.on('update-thresholds', (event, thresholds) => {
 });
 
 ipcMain.on('get-thresholds', (event) => {
-  event.reply('thresholds-data', { ...alertThresholds, splitStrategy, maxFileSize });
+  const currentThresholds = getCurrentThresholds();
+  event.reply('thresholds-data', {
+    ...alertThresholds,
+    splitStrategy,
+    maxFileSize,
+    currentThresholds,
+    config: thresholdConfig,
+    templates: THRESHOLD_TEMPLATES
+  });
+});
+
+ipcMain.on('update-threshold-config', (event, config) => {
+  thresholdConfig = { ...thresholdConfig, ...config };
+  saveThresholdConfig();
+  const currentThresholds = getCurrentThresholds();
+  event.reply('thresholds-updated', { ...alertThresholds, splitStrategy, maxFileSize, currentThresholds });
+});
+
+ipcMain.on('apply-threshold-template', (event, templateId) => {
+  const template = THRESHOLD_TEMPLATES[templateId];
+  if (template) {
+    thresholdConfig.mode = 'period';
+    thresholdConfig.periods = JSON.parse(JSON.stringify(template.periods));
+    saveThresholdConfig();
+    const currentThresholds = getCurrentThresholds();
+    event.reply('thresholds-updated', { ...alertThresholds, splitStrategy, maxFileSize, currentThresholds });
+  }
+});
+
+ipcMain.on('get-threshold-templates', (event) => {
+  event.reply('threshold-templates', THRESHOLD_TEMPLATES);
 });
 
 ipcMain.on('export-report', async (event, options = {}) => {

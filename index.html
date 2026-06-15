@@ -208,28 +208,98 @@
     </main>
 
     <div class="modal-overlay" id="settingsModal">
-      <div class="modal modal-lg">
+      <div class="modal modal-xl">
         <div class="modal-header">
           <h2>系统设置</h2>
           <button class="btn-close" id="btnCloseSettings">×</button>
         </div>
         <div class="modal-body">
           <div class="settings-section">
-            <h3>告警阈值</h3>
+            <h3>阈值模式</h3>
+            <div class="mode-switch">
+              <button class="mode-btn active" id="modeFixed" data-mode="fixed">统一阈值</button>
+              <button class="mode-btn" id="modePeriod" data-mode="period">分时段阈值</button>
+            </div>
+          </div>
+
+          <div id="fixedThresholdSection" class="settings-section">
+            <h3>告警阈值（统一）</h3>
             <div class="setting-item">
               <label>CPU 告警阈值 (%)</label>
-              <input type="range" id="cpuThreshold" min="10" max="100" value="80">
-              <span class="threshold-value" id="cpuThresholdValue">80%</span>
+              <div class="range-row">
+                <input type="range" id="cpuThreshold" min="10" max="100" value="80">
+                <span class="threshold-value" id="cpuThresholdValue">80%</span>
+              </div>
             </div>
             <div class="setting-item">
               <label>内存告警阈值 (%)</label>
-              <input type="range" id="memoryThreshold" min="10" max="100" value="80">
-              <span class="threshold-value" id="memoryThresholdValue">80%</span>
+              <div class="range-row">
+                <input type="range" id="memoryThreshold" min="10" max="100" value="80">
+                <span class="threshold-value" id="memoryThresholdValue">80%</span>
+              </div>
             </div>
             <div class="setting-item">
               <label>磁盘告警阈值 (%)</label>
-              <input type="range" id="diskThreshold" min="10" max="100" value="90">
-              <span class="threshold-value" id="diskThresholdValue">90%</span>
+              <div class="range-row">
+                <input type="range" id="diskThreshold" min="10" max="100" value="90">
+                <span class="threshold-value" id="diskThresholdValue">90%</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="periodThresholdSection" class="settings-section" style="display:none;">
+            <div class="period-header">
+              <h3>分时段阈值配置</h3>
+              <div class="period-header-actions">
+                <button class="btn btn-outline btn-sm" id="btnCopyDayConfig">复制配置</button>
+                <button class="btn btn-outline btn-sm" id="btnApplyToAll">应用到全部</button>
+              </div>
+            </div>
+
+            <div class="template-section">
+              <span class="template-label">快速模板：</span>
+              <div class="template-cards">
+                <button class="template-card" data-template="office">
+                  <span class="template-icon">🏢</span>
+                  <span class="template-name">办公场景</span>
+                  <span class="template-desc">工作时间高阈值</span>
+                </button>
+                <button class="template-card" data-template="server">
+                  <span class="template-icon">🖥️</span>
+                  <span class="template-name">服务器场景</span>
+                  <span class="template-desc">稳定高负载</span>
+                </button>
+                <button class="template-card" data-template="personal">
+                  <span class="template-icon">💻</span>
+                  <span class="template-name">个人电脑</span>
+                  <span class="template-desc">日常使用适中</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="current-threshold-info" id="currentThresholdInfo">
+              当前生效阈值: CPU <span id="currentCpuT">80</span>% / 内存 <span id="currentMemT">80</span>% / 磁盘 <span id="currentDiskT">90</span>%
+            </div>
+
+            <div class="calendar-view" id="calendarView">
+              <div class="calendar-days-header">
+                <div class="day-header">周一</div>
+                <div class="day-header">周二</div>
+                <div class="day-header">周三</div>
+                <div class="day-header">周四</div>
+                <div class="day-header">周五</div>
+                <div class="day-header">周六</div>
+                <div class="day-header">周日</div>
+              </div>
+              <div class="calendar-grid" id="calendarGrid"></div>
+            </div>
+
+            <div class="period-editor" id="periodEditor" style="display:none;">
+              <div class="period-editor-header">
+                <h4 id="periodEditorTitle">编辑时段</h4>
+                <button class="btn btn-outline btn-sm" id="btnAddPeriod">添加时段</button>
+              </div>
+              <div class="period-list" id="periodList"></div>
             </div>
           </div>
           
@@ -237,8 +307,10 @@
             <h3>日志设置</h3>
             <div class="setting-item">
               <label>日志写入间隔 (秒)</label>
-              <input type="range" id="logInterval" min="10" max="300" step="10" value="60">
-              <span class="threshold-value" id="logIntervalValue">60秒</span>
+              <div class="range-row">
+                <input type="range" id="logInterval" min="10" max="300" step="10" value="60">
+                <span class="threshold-value" id="logIntervalValue">60秒</span>
+              </div>
             </div>
             <div class="setting-item">
               <label>文件分割策略</label>
@@ -249,14 +321,55 @@
             </div>
             <div class="setting-item">
               <label>单文件最大大小 (MB)</label>
-              <input type="range" id="maxFileSize" min="10" max="500" step="10" value="50">
-              <span class="threshold-value" id="maxFileSizeValue">50 MB</span>
+              <div class="range-row">
+                <input type="range" id="maxFileSize" min="10" max="500" step="10" value="50">
+                <span class="threshold-value" id="maxFileSizeValue">50 MB</span>
+              </div>
             </div>
           </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelSettings">取消</button>
           <button class="btn btn-primary" id="btnSaveSettings">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="copyDayModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>复制配置</h2>
+          <button class="btn-close" id="btnCloseCopyDay">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="setting-item">
+            <label>从哪天复制</label>
+            <select id="copySourceDay">
+              <option value="1">周一</option>
+              <option value="2">周二</option>
+              <option value="3">周三</option>
+              <option value="4">周四</option>
+              <option value="5">周五</option>
+              <option value="6">周六</option>
+              <option value="0">周日</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label>复制到（可多选）</label>
+            <div class="checkbox-group" id="copyTargetDays">
+              <label class="checkbox-label"><input type="checkbox" value="1">周一</label>
+              <label class="checkbox-label"><input type="checkbox" value="2">周二</label>
+              <label class="checkbox-label"><input type="checkbox" value="3">周三</label>
+              <label class="checkbox-label"><input type="checkbox" value="4">周四</label>
+              <label class="checkbox-label"><input type="checkbox" value="5">周五</label>
+              <label class="checkbox-label"><input type="checkbox" value="6">周六</label>
+              <label class="checkbox-label"><input type="checkbox" value="0">周日</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelCopyDay">取消</button>
+          <button class="btn btn-primary" id="btnConfirmCopyDay">确认复制</button>
         </div>
       </div>
     </div>
